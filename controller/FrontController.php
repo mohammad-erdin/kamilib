@@ -12,6 +12,7 @@ class FrontController
         return $response
             ->withJson([
                 "success" => true,
+                "test" => $request->getAttributes(),
             ]);
 
         // atau $this->template->render(..,..);
