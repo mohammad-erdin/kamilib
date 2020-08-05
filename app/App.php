@@ -6,34 +6,14 @@ use Exception;
 use function Symfony\Component\String\s;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Jenssegers\Blade\Blade;
-use Middlewares\Utils\Dispatcher;
 use Narrowspark\HttpEmitter\SapiEmitter;
-use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
-use Psr\Http\Server\MiddlewareInterface;
-use Psr\Http\Server\RequestHandlerInterface;
 use Slim\Http\Response;
 use Slim\Http\ServerRequest;
+use Slim\Psr7\Factory\ResponseFactory;
 use Slim\Psr7\Factory\ServerRequestFactory;
 use Slim\Psr7\Factory\StreamFactory;
 use Throwable;
-
-class TestMiddleware implements MiddlewareInterface
-{
-    public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
-    {
-        $response = $handler->handle($request);
-        return $response->withHeader('X-Foo', 'Bar');
-    }
-}
-class Test2Middleware implements MiddlewareInterface
-{
-    public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
-    {
-        $response = $handler->handle($request);
-        return $response->withHeader('Baru', 'Bar');
-    }
-}
 
 class App
 {
@@ -84,37 +64,41 @@ class App
             // request
             $request = new ServerRequest((new ServerRequestFactory())->createFromGlobals()); //ServerRequestInterface
 
-            // core routing
+            // core Routing
             $target = array_values(array_diff(s($request->getUri()->getPath())->split('/'), [""]));
-            $controller = 'Controller\\' . s($target[0] ?? $this->config["app"]["defaultController"])->title() . 'Controller';
-            $method = s($target[1] ?? $this->config["app"]["defaultMethod"]);
+            $controller = s($target[0] ?? $this->config["app"]["defaultController"])->title()->toString();
+            $method = s($target[1] ?? $this->config["app"]["defaultMethod"])->toString();
+            $controller = 'Controller\\' . $controller . 'Controller';
+
+            if (!class_exists($controller)) {
+                $method = s($target[0] ?? $this->config["app"]["defaultController"])->title()->toString();
+                $controller = 'Controller\\' . $this->config["app"]["defaultController"] . 'Controller';
+            }
+
+            $path = $controller . '\\' . $method;
             $class = new $controller();
+
             if (!method_exists($class, $method)) {
-                throw new Exception("Not Found!!!");
+                throw new Exception("Method $method not found in $controller");
             }
 
             // Middleware
-            $dispatcher = new Dispatcher([
-                new TestMiddleware(),
-                new Test2Middleware(),
-            ]);
-
-            // Response
-            $response = call_user_func([
-                $class, s($method)->toString(),
-            ], ...array_merge([$request, new Response($dispatcher->dispatch($request), new StreamFactory())])
-            ) ?? null;
+            $listMiddleware = [];
+            array_push($listMiddleware, ...$class->middleware);
+            array_push($listMiddleware, function (ServerRequestInterface $request, $test) use ($class, $method) {
+                $response = new Response((new ResponseFactory())->createResponse(200, "OK"), new StreamFactory());
+                return $class->$method($request, $response);
+            });
+            $response = (new Dispatcher($listMiddleware, $path))->dispatch($request);
 
             // Emit Response
             if ($response instanceof \Slim\Http\Response) {
                 (new SapiEmitter())->emit($response);
             }
         } catch (Exception $e) {
-            print_r($e->getMessage() . '<br>');
-            print_r($e->getTraceAsString());
+            echo $this->template->render('error.error', ['error' => $e]);
         } catch (Throwable $e) {
-            print_r($e->getMessage() . '<br>');
-            print_r($e->getTraceAsString());
+            echo $this->template->render('error.error', ['error' => $e]);
         }
     }
 }
